@@ -8,7 +8,7 @@ export const siteData = {
   vectorArea: 1130.01,
   existingBuilding: {corners:[[34.72995,1.28242],[34.72995,13.15132],[23.72472,13.15132],[23.72472,1.28242]],center:[29.227335,7.21687]},
   design: {
-    villas:[{name:'一号楼',x:-5.2,z:10.85},{name:'二号楼',x:10.8,z:9.85}],
+    villas:[{name:'一号楼',x:-2.3,z:14,rotation:-Math.PI/2},{name:'二号楼',x:14.8,z:7.5,rotation:-Math.PI/2}],
     houseWidth:12,houseDepth:15,houseFootprint:180,floorHeight:3.3,
     courtyardCenterX:2.8,wallHeight:2,wallCapHeight:.12,gatePierHeight:2.25,
     gateLeafTop:1.95,gateClearWidth:4,pedestrianGateClearWidth:1.2,roadWidth:5.5

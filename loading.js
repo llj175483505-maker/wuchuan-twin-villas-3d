@@ -62,7 +62,7 @@
 
   window.courtyardLoading = loading;
   scene.setAttribute('aria-busy', 'true');
-  import('./main.js?v=b1').catch(error => {
+  import('./main.js?v=b2-west').catch(error => {
     console.error('Courtyard initialization failed:', error);
     loading.fail();
   });

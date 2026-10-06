@@ -3,7 +3,7 @@ import { mergeGeometries } from 'three/addons/utils/BufferGeometryUtils.js';
 
 // All dimensions are metres. The 12 × 15 outer envelope includes the recessed
 // porch and balconies; their floor slabs do not enlarge the 180 m² footprint.
-export function createVilla({ scene, M, box, cylinder, x, z, name }) {
+export function createVilla({ scene, M, box, cylinder, x, z, name, rotation = 0 }) {
   const root = new THREE.Group();
   root.name = name || '180㎡住宅';
   root.position.set(x, 0, z);
@@ -266,6 +266,9 @@ export function createVilla({ scene, M, box, cylinder, x, z, name }) {
     roofMat.roughness=rain?.54:.95;
     stone.roughness=rain?.49:.72;
   }
+  // Rotate the finished residence as one object, including openings and balconies.
+  root.rotation.y=rotation;
+  root.updateMatrixWorld(true);
   setFloors(3,true);setLight(false,false);
   return { root, setFloors, setLight, update() {}, footprint:180, width:12, depth:15, finishHeight:finish, height:11.71 };
 }
