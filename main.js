@@ -1,0 +1,388 @@
+import * as THREE from 'three';
+import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
+import { siteData } from './site-data.js?v=b1';
+import { prepareMaterials } from './realism.js?v=b1';
+import { mobileLayout, sceneInsets, setupMobileUI } from './mobile-ui.js?v=b1';
+
+import { createVilla } from './villa.js?v=b1';
+import { createGarden } from './b-garden.js?v=b1';
+
+const loading = window.courtyardLoading;
+await loading.stage(1, '正在启动三维引擎', '程序已加载 · 正在准备显示设备');
+const host = document.getElementById('scene');
+const annotations = [];
+const dimensions = new THREE.Group();
+const existing = new THREE.Group();
+const roofGroup = new THREE.Group();
+const upperGroup = new THREE.Group();
+const lowerLabels = [];
+const v3 = (x,y,z) => new THREE.Vector3(x,y,z);
+const P = siteData.boundary.map(([x,z])=>[x-27.5,z]);
+const scene = new THREE.Scene();
+scene.background = new THREE.Color('#dce7df');
+scene.fog = new THREE.Fog('#dce7df',240,390);
+const camera = new THREE.PerspectiveCamera(50,1,.1,400);
+let renderer;
+try {
+  renderer = new THREE.WebGLRenderer({antialias:true,alpha:false});
+} catch (error) {
+  loading.fail('当前浏览器无法启动 3D 显示。请使用新版 Chrome 或 Edge，并开启浏览器图形加速后重试。');
+  throw error;
+}
+renderer.domElement.addEventListener('webglcontextlost',()=>{
+  if(document.documentElement.dataset.sceneReady!=='true'){
+    loading.fail('3D 显示在加载时中断，请关闭其他占用显卡的页面后重新加载。');
+  }else{
+    const notice=document.getElementById('error');notice.hidden=false;
+    notice.textContent='3D 显示暂时中断，请刷新页面重新加载。';
+  }
+});
+renderer.setPixelRatio(Math.min(devicePixelRatio,1.75));
+renderer.shadowMap.enabled = true;
+renderer.shadowMap.type = THREE.PCFSoftShadowMap;
+renderer.outputColorSpace = THREE.SRGBColorSpace;
+renderer.toneMapping = THREE.ACESFilmicToneMapping;
+renderer.toneMappingExposure = 1;
+host.append(renderer.domElement);
+renderer.domElement.setAttribute('aria-label','庭院三维模型，左键拖动旋转，滚轮缩放，右键平移');
+renderer.domElement.setAttribute('tabindex','0');
+const controls = new OrbitControls(camera,renderer.domElement);
+controls.enableDamping=true;controls.dampingFactor=.075;
+controls.minDistance=8;controls.maxDistance=240;
+controls.maxPolarAngle=Math.PI*.486;
+controls.minPolarAngle=.015;
+controls.screenSpacePanning=false;
+controls.target.set(0,0,13);
+controls.listenToKeyEvents(renderer.domElement);
+const hemi=new THREE.HemisphereLight('#eff4ff','#65745b',1.4);scene.add(hemi);
+const sun = new THREE.DirectionalLight('#fff2d9',3);
+sun.position.set(25,45,35);sun.castShadow=true;
+sun.shadow.mapSize.set(4096,4096);
+Object.assign(sun.shadow.camera,{left:-34,right:34,top:34,bottom:-34,near:1,far:150});
+sun.shadow.normalBias=.035;sun.shadow.bias=-.0002;sun.target.position.set(0,0,13);
+scene.add(sun,sun.target);
+const mat = (color,extra={}) => new THREE.MeshStandardMaterial({color,roughness:.83,...extra});
+const M = {
+  wall:mat('#f0ece0'),trim:mat('#e6dfca'),base:mat('#a8aa9c'),roof:mat('#5c6868'),roofEdge:mat('#4c5b59'),
+  wood:mat('#916949'),woodLight:mat('#b89870'),dark:mat('#354a43'),glass:mat('#80a6aa',{metalness:.3,roughness:.2}),
+  paving:mat('#d4d1bc'),path:mat('#dcdace'),road:mat('#74817e'),soil:mat('#aa967b'),grass:mat('#9db37d'),
+  grassDeep:mat('#88a86b'),leaf:mat('#60844f'),leafLight:mat('#779758'),leafDark:mat('#426e4c'),trunk:mat('#826448'),
+  white:mat('#eaeae0'),black:mat('#34413c'),water:mat('#83a99d'),clay:mat('#b68c65'),fabric:mat('#d2c4a4')
+};
+await loading.stage(2, '正在加载庭院材质', '正在读取石材、木纹、绿植与天空');
+try {await prepareMaterials(M,scene,renderer,{
+  onProgress: (done,total) => loading.resources(done,total),
+  beforeEnvironment: () => loading.stage(18, '正在准备环境光影', '材质与环境资源 16 / 16 · 正在生成天空反射')
+});} catch(error) {
+  loading.fail('材质未能完整加载，请检查网络后点击“重新加载”。');throw error;
+}
+await loading.stage(18, '正在生成庭院', '正在构建两栋180㎡住宅与三车停车区');
+const geometries=new Map();
+function box(w,h,d,x,y,z,material,parent=scene){
+  const key=`${w},${h},${d}`;let geom=geometries.get(key);if(!geom){geom=new THREE.BoxGeometry(w,h,d);const p=geom.attributes.position,n=geom.attributes.normal,uv=geom.attributes.uv;for(let i=0;i<p.count;i++){if(Math.abs(n.getX(i))>.5)uv.setXY(i,p.getZ(i),p.getY(i));else if(Math.abs(n.getY(i))>.5)uv.setXY(i,p.getX(i),p.getZ(i));else uv.setXY(i,p.getX(i),p.getY(i));}geometries.set(key,geom);}
+  const mesh=new THREE.Mesh(geom,material);mesh.position.set(x,y,z);mesh.castShadow=true;mesh.receiveShadow=true;parent.add(mesh);return mesh;
+}
+function cylinder(rt,rb,h,x,y,z,material,parent=scene,segments=12){
+  const m=new THREE.Mesh(new THREE.CylinderGeometry(rt,rb,h,segments),material);m.position.set(x,y,z);m.castShadow=true;m.receiveShadow=true;parent.add(m);return m;
+}
+function slab(points,height,material,y=0){
+  const shape=new THREE.Shape();points.forEach(([x,z],i)=>i?shape.lineTo(x,-z):shape.moveTo(x,-z));shape.closePath();
+  const geom=new THREE.ExtrudeGeometry(shape,{depth:height,bevelEnabled:false});geom.rotateX(-Math.PI/2);
+  const mesh=new THREE.Mesh(geom,material);mesh.position.y=y;mesh.castShadow=true;mesh.receiveShadow=true;scene.add(mesh);return mesh;
+}
+function line(points,color='#678175',parent=scene,dashed=false){
+  const geom=new THREE.BufferGeometry().setFromPoints(points.map(p=>v3(...p)));
+  const material=dashed?new THREE.LineDashedMaterial({color,dashSize:.4,gapSize:.25}):new THREE.LineBasicMaterial({color});
+  const mesh=new THREE.Line(geom,material);if(dashed)mesh.computeLineDistances();parent.add(mesh);return mesh;
+}
+function segment(a,b,h,thickness,material,parent=scene,y=0){
+  const len=Math.hypot(b[0]-a[0],b[1]-a[1]);
+  const mesh=box(len,h,thickness,(a[0]+b[0])/2,y+h/2,(a[1]+b[1])/2,material,parent);
+  mesh.rotation.y=-Math.atan2(b[1]-a[1],b[0]-a[0]);return mesh;
+}
+function label(text,position,type='space',classes=''){
+  const el=document.createElement('div');el.className=(type==='dimension'?'dimension-label':'scene-label')+' '+classes;el.textContent=text;el.setAttribute('aria-hidden','true');host.append(el);
+  const item={el,position:v3(...position),type,enabled:true};annotations.push(item);return item;
+}
+function inSite(x,z){let inside=false;for(let i=0,j=P.length-1;i<P.length;j=i++){
+  const [xi,zi]=P[i],[xj,zj]=P[j];if((zi>z)!==(zj>z)&&x<(xj-xi)*(z-zi)/(zj-zi)+xi)inside=!inside;
+}return inside;}
+
+// A metre in this scene is one metre in the plan, in all three axes.
+slab(P,.43,M.soil,-.42);
+slab(P,.035,M.grass,0);
+// Display only the measured plot and the road directly along its frontage.
+const frontage=siteData.frontageProjection;
+box(frontage,.13,5.5,0,-.12,-3.35,M.road);
+box(frontage,.12,.32,0,-.02,-.44,M.path);
+box(frontage,.12,.32,0,-.02,-6.26,M.path);
+for(let x=-frontage/2+2.75;x<frontage/2-1.4;x+=5.5)box(2.8,.015,.07,x,-.045,-3.35,M.trim);
+label('北侧道路',[6,.2,-3.8],'space','road-label');
+
+// Boundary walls follow the original vector polyline, including its north-side kink.
+const wallBodyHeight=siteData.design.wallHeight-siteData.design.wallCapHeight;
+function boundaryWall(a,b){
+  segment(a,b,wallBodyHeight,.22,M.wall);
+  segment(a,b,siteData.design.wallCapHeight,.29,M.trim,scene,wallBodyHeight);
+  segment(a,b,.3,.24,M.base);
+}
+for(let i=0;i<6;i++){
+  boundaryWall(P[i],P[i+1]);
+}
+const northZ=x=>3.00976*(13.90376-x)/41.40376;
+const gateX=-18,gateZ=northZ(gateX);
+const openingL=-20.25,openingR=-14.25;
+slab([[openingL,-.52],[openingR,-.52],[openingR,northZ(openingR)+.2],[openingL,northZ(openingL)+.2]],.03,M.paving,-.015);
+boundaryWall(P[6],[openingL,northZ(openingL)]);
+boundaryWall([openingR,northZ(openingR)],P[7]);
+boundaryWall(P[7],P[0]);
+// Car gate clear opening 4m, pedestrian gate 1.2m. All are proposed dimensions.
+const gateAssembly = new THREE.Group();gateAssembly.position.set(gateX,0,gateZ);gateAssembly.rotation.y=Math.atan2(3.00976,41.40376);scene.add(gateAssembly);
+const pierBodyHeight=siteData.design.gatePierHeight-.12;
+for(const x of [-2.25,2.25,3.95]){box(.5,pierBodyHeight,.6,x,pierBodyHeight/2,0,M.wall,gateAssembly);box(.58,.12,.7,x,pierBodyHeight+.06,0,M.trim,gateAssembly);box(.22,.17,.23,x,1.91,-.32,M.dark,gateAssembly);}
+// Sliding leaf runs behind the piers on the courtyard side of the boundary wall.
+const carGate=new THREE.Group();carGate.position.set(-2,0,.42);gateAssembly.add(carGate);
+box(8.15,.035,.065,-2.075,.075,.42,M.base,gateAssembly);
+const gateTop=siteData.design.gateLeafTop,gateBottom=.14;
+box(4,.14,.13,2,.16,0,M.dark,carGate);box(4,.12,.13,2,gateTop-.06,0,M.dark,carGate);
+for(let i=0;i<30;i++)box(.068,gateTop-gateBottom,.095,.08+i*.132,(gateTop+gateBottom)/2,0,M.timber,carGate);
+const pedestrianGate=new THREE.Group();pedestrianGate.position.set(2.5,0,0);gateAssembly.add(pedestrianGate);
+box(1.2,.11,.1,.6,.16,0,M.dark,pedestrianGate);box(1.2,.12,.1,.6,gateTop-.06,0,M.dark,pedestrianGate);
+for(let i=0;i<10;i++)box(.065,gateTop-gateBottom,.09,.05+i*.12,(gateTop+gateBottom)/2,0,M.timber,pedestrianGate);
+box(.055,.2,.055,.95,1.02,-.08,M.dark,pedestrianGate);
+label('车门 4m / 人行门 1.2m（拟）',[-16.8,2.8,gateZ],'space');
+label('围墙总高 2.00m（拟）',[12,2.15,northZ(12)],'dimension');
+// Three independent 2.8 x 5.5m bays face a shared 6m manoeuvring aisle.
+// Proposed dimensions, not a swept-path certification for a specific vehicle.
+slab([[-20,northZ(-20)+.08],[-16,northZ(-16)+.08],[-16,3.2],[-20,3.2]],.035,M.paving,.045);
+box(9.8,.035,6,-17.25,.0625,6.2,M.paving);
+const parkingSurface=M.paving.clone();parkingSurface.color.set('#a3aaa5');
+box(8.4,.035,5.5,-16.55,.0625,11.95,parkingSurface);
+
+// A clear strip separates the main pedestrian route from the parking aisle.
+box(.24,.02,5.8,-12.15,.095,6.2,M.grassDeep);
+for(const x of [-20.75,-17.95,-15.15,-12.35])box(.075,.009,5.5,x,.089,11.95,M.white);
+box(8.4,.009,.075,-16.55,.089,14.7,M.white);
+const parkingCenters=[-19.35,-16.55,-13.75];
+parkingCenters.forEach((x,i)=>{
+  box(1.65,.1,.17,x,.135,14.42,M.base);
+  const canvas=document.createElement('canvas');canvas.width=256;canvas.height=96;const ctx=canvas.getContext('2d');
+  ctx.font='bold 72px sans-serif';ctx.textAlign='center';ctx.textBaseline='middle';ctx.fillStyle='#f6f5ea';ctx.fillText('P'+(i+1),128,48);
+  const tex=new THREE.CanvasTexture(canvas);tex.colorSpace=THREE.SRGBColorSpace;
+  const marking=new THREE.Mesh(new THREE.PlaneGeometry(.82,.31),new THREE.MeshBasicMaterial({map:tex,transparent:true,depthWrite:false}));
+  marking.rotation.x=-Math.PI/2;marking.position.set(x,.097,9.39);scene.add(marking);
+});
+label('三车停车 · 每位2.8 × 5.5m（拟）',[-16.55,2.1,12]);
+label('倒车通道 · 深6m（拟）',[-17.25,.2,6.2]);
+// Passenger-car models provide a consistent physical scale: 4.75 x 1.85m.
+function car(x,z,color){
+  const g=new THREE.Group();g.position.set(x,.08,z);scene.add(g);
+  const paint=mat(color,{roughness:.34,metalness:.28});
+  const carGlass=new THREE.MeshPhysicalMaterial({color:'#33434b',roughness:.11,metalness:.45,envMapIntensity:1.2});
+  function body(w,h,d,xx,yy,zz,material){
+    const shape=new THREE.Shape();shape.moveTo(-w/2+.08,-h/2);shape.lineTo(w/2-.08,-h/2);shape.quadraticCurveTo(w/2,-h/2,w/2,-h/2+.08);shape.lineTo(w/2,h/2-.08);shape.quadraticCurveTo(w/2,h/2,w/2-.08,h/2);shape.lineTo(-w/2+.08,h/2);shape.quadraticCurveTo(-w/2,h/2,-w/2,h/2-.08);shape.lineTo(-w/2,-h/2+.08);shape.quadraticCurveTo(-w/2,-h/2,-w/2+.08,-h/2);
+    const geometry=new THREE.ExtrudeGeometry(shape,{depth:d-.08,steps:1,bevelEnabled:true,bevelThickness:.04,bevelSize:.02,bevelSegments:2,curveSegments:5});geometry.translate(0,0,-d/2+.04);
+    const mesh=new THREE.Mesh(geometry,material);mesh.position.set(xx,yy,zz);mesh.castShadow=true;mesh.receiveShadow=true;g.add(mesh);return mesh;
+  }
+  body(1.81,.59,4.67,0,.66,0,paint);body(1.60,.68,2.47,0,1.11,.12,paint);
+  const front=box(1.47,.50,.025,0,1.18,-1.10,carGlass,g);front.rotation.x=.30;
+  const rear=box(1.44,.46,.025,0,1.17,1.38,carGlass,g);rear.rotation.x=-.25;
+  box(1.75,.16,.06,0,.47,-2.365,M.dark,g);box(1.74,.16,.07,0,.45,2.365,M.dark,g);
+  for(const side of [-1,1]){
+    box(.025,.45,2.15,side*.813,1.17,.12,carGlass,g);box(.045,.53,.075,side*.827,1.17,.15,M.dark,g);
+    box(.16,.1,.25,side*.95,1.08,-.74,paint,g);
+    for(const zz of [-1.48,1.48]){const wheel=cylinder(.34,.34,.19,side*.85,.34,zz,M.black,g,24);wheel.rotation.z=Math.PI/2;const hub=cylinder(.21,.21,.20,side*.87,.34,zz,M.base,g,16);hub.rotation.z=Math.PI/2;}
+    box(.49,.08,.045,side*.56,.72,-2.37,M.white,g);
+    box(.42,.08,.045,side*.56,.72,2.37,mat('#9f3029'),g);
+    for(const zz of [-.37,.73])box(.035,.04,.18,side*.93,.89,zz,M.base,g);
+  }
+  box(.4,.12,.025,0,.54,-2.4,M.white,g);
+}
+parkingCenters.forEach((x,i)=>car(x,11.95,['#eeeae2','#667b82','#b2b6b3'][i]));
+
+// Scheme B: two separate 12 x 15m footprints; all positions are metres.
+const courtX=2.8;
+const villas=siteData.design.villas.map(v=>createVilla({scene,M,box,cylinder,...v}));
+const villaLabels=siteData.design.villas.map(v=>label(v.name+' · 占地180㎡（拟）',[v.x,12,v.z]));
+// Shared south terrace and a continuous central walk keep both entrances clear.
+box(22.95,.065,1.65,.675,.0525,19.175,M.paving);
+box(3.6,.065,1,10.8,.0525,17.85,M.paving);
+box(3.4,.065,15.55,2.8,.0525,10.625,M.path);
+box(2,.065,9,2.8,.0525,24.5,M.path);
+slab([[-15.6,northZ(-15.6)+.14],[-11.4,northZ(-11.4)+.2],[4.4,northZ(4.4)+.2],[4.4,3.2],[-11.1,3.30],[-15.6,3.25]],.04,M.path,.045);
+// West access connects the pedestrian entrance, parking and the shared terrace.
+box(1.1,.045,11.5,-11.8,.0625,13.45,M.path);
+box(2.1,.045,1.2,-12.3,.0625,7.5,M.path);
+for(const v of siteData.design.villas){
+  // Gentle 0.095m rise over 1.20m meets each recessed entrance threshold.
+  const geom=new THREE.BoxGeometry(2.6,.065,1.2);
+  const pos=geom.attributes.position;
+  for(let i=0;i<pos.count;i++)pos.setY(i,pos.getY(i)+.095*(.6-pos.getZ(i))/1.2);
+  geom.computeVertexNormals();
+  const ramp=new THREE.Mesh(geom,M.path);ramp.position.set(v.x,.0525,v.z+8.1);ramp.receiveShadow=true;scene.add(ramp);
+  for(const dx of [-2.35,2.35]){box(.65,.5,.65,v.x+dx,.335,v.z+8,M.wall);cylinder(.34,.28,.10,v.x+dx,.625,v.z+8,M.soil);}
+  lowerLabels.push(label(v.name+' · 一楼空间示意',[v.x,.45,11],'floor','floor-label'));
+}
+label('双楼间距 4m（外墙间）',[2.8,.4,12]);
+label('共享庭院 · 连续步道',[2.8,.35,22]);
+await loading.stage(19,'正在布置共享花园','正在生成住宅细节、绿植、浅水镜池与休憩区');
+const landscape=createGarden({scene,M,box,cylinder,inSite});
+// Rain is an optional atmosphere; its drops are kept within the property.
+const rainPoints=[];
+for(let i=0;i<950;i++){const x=Math.random()*55-27.5,z=Math.random()*35;if(inSite(x,z))rainPoints.push(x,Math.random()*17,z);}
+const rainGeometry=new THREE.BufferGeometry();rainGeometry.setAttribute('position',new THREE.Float32BufferAttribute(rainPoints,3));
+const rainCloud=new THREE.Points(rainGeometry,new THREE.PointsMaterial({color:'#ccdce2',size:.033,transparent:true,opacity:.6,depthWrite:false}));
+rainCloud.visible=false;scene.add(rainCloud);
+let floorCount=3,currentLight='day';
+function updateBuilding(){
+  const exterior=document.getElementById('roof').checked;
+  roofGroup.visible=exterior;
+  villas.forEach(v=>{v.setFloors(exterior?floorCount:1,exterior);v.setLight(currentLight==='dusk',currentLight==='rain');});
+  villaLabels.forEach((l,i)=>{l.position.y=1.8+floorCount*3.3;l.el.textContent=siteData.design.villas[i].name+' · '+floorCount+'层 · 占地180㎡';});
+  document.getElementById('floor-area').textContent='每栋180㎡ · 两栋楼层面积合计约'+(360*floorCount)+'㎡';
+  document.querySelectorAll('[data-floors]').forEach(b=>{const on=Number(b.dataset.floors)===floorCount;b.classList.toggle('active',on);b.setAttribute('aria-pressed',String(on));});
+  document.documentElement.dataset.floors=String(floorCount);
+}
+function setLight(mode){
+  currentLight=mode;const dusk=mode==='dusk',rain=mode==='rain';
+  hemi.intensity=dusk?.65:rain?1.2:1.4;sun.intensity=dusk?.32:rain?.65:3;
+  sun.color.set(dusk?'#a9bbd7':'#fff2d9');scene.environmentIntensity=dusk?.4:1.1;
+  scene.background.set(dusk?'#43566c':rain?'#b7c6c9':'#cbdbe0');scene.fog.color.copy(scene.background);
+  scene.fog.near=rain?40:120;scene.fog.far=rain?150:260;renderer.toneMappingExposure=dusk?1.12:1.05;
+  villas.forEach(v=>v.setLight(dusk,rain));landscape.setLight(dusk,rain);rainCloud.visible=rain;
+  document.querySelectorAll('[data-light]').forEach(b=>{const on=b.dataset.light===mode;b.classList.toggle('active',on);b.setAttribute('aria-pressed',String(on));});
+  document.documentElement.dataset.lighting=mode;
+}
+document.querySelectorAll('[data-floors]').forEach(b=>b.addEventListener('click',()=>{floorCount=Number(b.dataset.floors);updateBuilding();}));
+document.querySelectorAll('[data-light]').forEach(b=>b.addEventListener('click',()=>setLight(b.dataset.light)));
+updateBuilding();setLight('day');
+await loading.stage(20,'正在准备双楼观景视角','正在设置光线、尺寸标注与手机交互');
+
+// Measured vectors and source annotations are deliberately distinct.
+scene.add(dimensions,existing);existing.visible=false;dimensions.visible=document.getElementById('dimensions').checked;
+function dimension(a,b,text,offset=1.3,cls=''){
+  const dx=b[0]-a[0],dz=b[1]-a[1],len=Math.hypot(dx,dz),ox=dz/len*offset,oz=-dx/len*offset;
+  const aa=[a[0]+ox,.15,a[1]+oz],bb=[b[0]+ox,.15,b[1]+oz];
+  line([aa,bb],'#789186',dimensions);
+  for(const p of [a,b])line([[p[0],.15,p[1]],[p[0]+ox*1.2,.15,p[1]+oz*1.2]],'#91a596',dimensions);
+  const tdx=dx/len*.22,tdz=dz/len*.22;
+  for(const p of [aa,bb])line([[p[0]-tdx-ox*.12,.17,p[2]-tdz-oz*.12],[p[0]+tdx+ox*.12,.17,p[2]+tdz+oz*.12]],'#789186',dimensions);
+  label(text,[(aa[0]+bb[0])/2,.35,(aa[2]+bb[2])/2],'dimension',cls);
+}
+for(let i=0;i<6;i++){
+  const txt=i===2?'20.69m · 图注20.37m*':`${siteData.annotations[i].toFixed(2)}m（图注）`;
+  dimension(P[i],P[i+1],txt,1.25,i===2?'discrepancy':'');
+}
+dimension([-27.5,0],[27.5,0],'55.00m · 总投影',8.0);
+dimension([-27.5,0],[13.90376,0],'41.40m · 投影',10.2);
+dimension([13.90376,0],[27.5,0],'13.60m · 投影',10.2);
+dimension([-20.75,9.2],[-17.95,9.2],'2.80m · 车位',.5,'design');
+dimension([-12.35,9.2],[-12.35,14.7],'5.50m · 车位',.5,'design');
+dimension([-22.15,3.2],[-22.15,9.2],'6.00m · 倒车通道',-.65,'design');
+for(const v of siteData.design.villas){dimension([v.x-6,v.z-7.5],[v.x+6,v.z-7.5],'12.00m · '+v.name,1.1,'design');dimension([v.x+6,v.z-7.5],[v.x+6,v.z+7.5],'15.00m · 占地180㎡',.8,'design');}
+dimension([.8,16],[4.8,16],'4.00m · 双楼间距',.4,'design');
+line([[30,.04,6],[30,.04,-1]],'#5b796c',dimensions);line([[29.5,.04,0],[30,.04,-1],[30.5,.04,0]],'#5b796c',dimensions);label('北 N',[30,.2,-2],'dimension');
+line([[-27,.04,26],[-22,.04,26]],'#5b796c',dimensions);
+for(const x of [-27,-22])line([[x,.04,25.7],[x,.04,26.3]],'#5b796c',dimensions);
+label('5m',[-24.5,.2,26.9],'dimension');
+if(siteData.existingBuilding){
+  const pts=siteData.existingBuilding.corners.map(([x,z])=>[x-27.5,.3,z]);line([...pts,pts[0]],'#b17f40',existing,true);
+  const item=label('原建筑 · 图注120㎡',[siteData.existingBuilding.center[0]-27.5,.45,siteData.existingBuilding.center[1]],'existing');item.enabled=false;
+}
+document.getElementById('dimension-source').innerHTML=`<p><b>图纸基准</b><br>地界沿用原 PDF 矢量轮廓，以北侧东西总投影55m定标；模型面积约1130.01㎡，原图标注1130㎡，北边保留原有折点。东南斜边图注20.37m，等比矢量约20.69m，此处保留原图轮廓。</p><p><b>B方案 · 两栋新建住宅</b><br>一号楼和二号楼均按12×15m外包络占地180㎡布置，合计360㎡，包含凹入式门廊和阳台，不含屋檐。默认每栋三层，层高3.3m；支持同步切换1／2／3层。楼层面积按180㎡×层数示意，三层时每栋约540㎡、两栋合计约1080㎡，阳台及实际建面计算需后续设计复核。两栋南向入户，外墙间距4m，独立入口通往共享庭院。室内为家具和分区示意。</p><p><b>通行与景观</b><br>保留北侧4m车门及1.2m人行门，西北侧三个2.8×5.5m并列车位，北侧倒车通道深6m。车辆按4.75×1.85m示意，具体转弯轨迹未校核。南侧连续露台连接两楼入口，门前以短缓坡处理低高差。园林布置在建筑南侧，包含浅水镜池、低矮花境与休憩座席。围墙含压顶总高2m。</p><p><b>尺寸说明</b><br>地块边界来自原图；建筑、室内、道路宽5.5m、墙高、景观与地面高差均为拟建设计。檐口与地界的几何余量不代表审批退界。原建筑轮廓可单独显示，本方案按拆除后重新布局。模型为概念交流使用，非施工图。</p>`;
+
+let cameraTween=null,gateOpen=false,gateProgress=0,touring=false,tourTime=0;
+let activeView='garden',layoutScale=1,hasView=false;
+let safeScene={top:95,bottom:110};
+function stopTour(){touring=false;document.getElementById('tour-toggle').textContent='自动漫游';document.getElementById('tour-toggle').setAttribute('aria-pressed','false');}
+const presets={
+ overview:{pos:[-49,57,64],target:[0,2,13],caption:'B方案 · 两栋各180㎡ · 原图1130㎡地块'},
+ parking:{pos:[-32,23,27],target:[-16.8,0,10],caption:'3个并列车位 · 每位2.8×5.5m · 倒车通道6m'},
+ gate:{pos:[-32,10,-22],target:[-15,2,7],caption:'北侧入口 · 车门4m + 人行门1.2m'},
+ garden:{pos:[-9,24,53],target:[2.8,4,12.5],caption:'双楼南向面向庭院 · 浅色立面 · 双层阳台 · 共享园林'},
+ detail:{pos:[-7.4,5.4,32],target:[-5.2,5.5,17.4],caption:'一号楼 · 内凹双阳台与宽檐 · 12×15m占地'},
+ water:{pos:[-1,6,29],target:[-7.7,.4,22.5],caption:'镜池花园 · 低矮花境 · 连续步道'},
+ tea:{pos:[-6,5.2,29],target:[-13,.7,23.7],caption:'树下休憩 · 家人共享的庭院'},
+ top:{pos:[0,86,13.1],target:[0,0,13],caption:'北在上 · 两栋180㎡占地 · 4m楼间距'}
+};
+const mobileFrames={overview:[60,45],parking:[17,16],gate:[20,18],garden:[41,30],detail:[14,15],water:[11,9],tea:[11,9],top:[60,42]};
+function framingScale(name){
+  if(!mobileLayout.matches)return 1;
+  const cfg=presets[name],distance=v3(...cfg.pos).distanceTo(v3(...cfg.target));
+  const visibleHeight=2*distance*Math.tan(THREE.MathUtils.degToRad(camera.fov/2));
+  const [width,height]=mobileFrames[name],usableHeight=Math.max(100,host.clientHeight-safeScene.top-safeScene.bottom);
+  return Math.max(1,width/(visibleHeight*camera.aspect),height/(visibleHeight*usableHeight/host.clientHeight));
+}
+function setView(name,instant=false){
+  stopTour();activeView=name;layoutScale=framingScale(name);hasView=true;
+  const cfg=presets[name],target=v3(...cfg.target);
+  const pos=v3(...cfg.pos).sub(target).multiplyScalar(layoutScale).add(target);
+  cameraTween=null;controls.enableDamping=false;controls.update();
+  camera.position.copy(pos);controls.target.set(...cfg.target);controls.update();controls.enableDamping=true;
+  renderer.render(scene,camera);
+  document.querySelectorAll('[data-view]').forEach(b=>{b.classList.toggle('active',b.dataset.view===name);b.setAttribute('aria-pressed',b.dataset.view===name?'true':'false');});
+  document.getElementById('view-caption').textContent=mobileLayout.matches&&name==='overview'?'单指旋转 · 双指缩放和平移':cfg.caption;
+  if(mobileLayout.matches){const bar=document.querySelector('.viewbar'),selected=bar.querySelector('[data-view="'+name+'"]');bar.scrollTo({left:Math.max(0,selected.offsetLeft-(bar.clientWidth-selected.offsetWidth)/2),behavior:'auto'});}
+}
+document.querySelectorAll('[data-view]').forEach(b=>b.addEventListener('click',()=>setView(b.dataset.view)));
+controls.addEventListener('start',()=>{cameraTween=null;stopTour();});
+document.getElementById('tour-toggle').addEventListener('click',()=>{if(touring){stopTour();return;}setView('garden');touring=true;tourTime=0;document.getElementById('tour-toggle').textContent='停止漫游';document.getElementById('tour-toggle').setAttribute('aria-pressed','true');});
+document.getElementById('gate-toggle').addEventListener('click',()=>{gateOpen=!gateOpen;document.getElementById('gate-toggle').textContent=gateOpen?'关闭院门':'打开院门';});
+document.getElementById('dimensions').addEventListener('change',e=>{dimensions.visible=e.target.checked;});
+document.getElementById('roof').addEventListener('change',updateBuilding);
+document.getElementById('existing').addEventListener('change',e=>{existing.visible=e.target.checked;annotations.filter(a=>a.type==='existing').forEach(a=>a.enabled=e.target.checked);});
+document.getElementById('help').addEventListener('click',()=>document.getElementById('help-dialog').showModal());
+document.getElementById('help-close').addEventListener('click',()=>document.getElementById('help-dialog').close());
+document.getElementById('plan-button').addEventListener('click',()=>document.getElementById('plan-dialog').showModal());
+document.getElementById('plan-close').addEventListener('click',()=>document.getElementById('plan-dialog').close());
+setupMobileUI({onReset:()=>setView('garden'),onPanelChange:open=>{controls.enabled=!open;if(open)stopTour();}});
+for(const d of document.querySelectorAll('dialog'))d.addEventListener('click',e=>{if(e.target===d)d.close();});
+function resize(){
+  const w=host.clientWidth,h=host.clientHeight;camera.aspect=w/h;renderer.setSize(w,h);camera.clearViewOffset();safeScene=sceneInsets();
+  if(mobileLayout.matches)camera.setViewOffset(w,h,0,(safeScene.bottom-safeScene.top)/2,w,h);
+  else{const offset=Math.min(150,w*.13);camera.setViewOffset(w,h,-offset,0,w,h);}
+  camera.updateProjectionMatrix();
+  if(hasView){const next=framingScale(activeView);camera.position.sub(controls.target).multiplyScalar(next/layoutScale).add(controls.target);layoutScale=next;cameraTween=null;}
+}
+
+await loading.stage(21, '正在渲染首帧画面', '正在准备阴影与水面反射，首次打开可能需要稍候');
+addEventListener('resize',resize);mobileLayout.addEventListener('change',resize);resize();setView('garden',true);
+const projected=new THREE.Vector3();
+let lastTime=performance.now();
+function tick(t){
+  const dt=Math.min((t-lastTime)/1000,.04);lastTime=t;
+  if(touring){tourTime+=dt;camera.position.set(courtX+Math.sin(tourTime*.11)*11,18+Math.sin(tourTime*.07)*3,48-Math.sin(tourTime*.09)*4);controls.target.set(courtX,floorCount===1?2:4.5,12);if(mobileLayout.matches)camera.position.sub(controls.target).multiplyScalar(layoutScale).add(controls.target);}
+  if(cameraTween){const v=Math.min((t-cameraTween.start)/800,1),ease=1-Math.pow(1-v,3);camera.position.lerpVectors(cameraTween.from,cameraTween.to,ease);controls.target.lerpVectors(cameraTween.fromTarget,cameraTween.target,ease);if(v===1)cameraTween=null;}
+  gateProgress=THREE.MathUtils.damp(gateProgress,gateOpen?1:0,5,dt);
+  carGate.position.x=-2-4.1*gateProgress;pedestrianGate.rotation.y=-Math.PI*.46*gateProgress;
+  controls.update();
+  landscape.update(t/1000);villas.forEach(v=>v.update?.(dt));
+  if(rainCloud.visible){const positions=rainGeometry.attributes.position;for(let i=0;i<positions.count;i++){let y=positions.getY(i)-dt*9;if(y<0)y=17;positions.setY(i,y);}positions.needsUpdate=true;}
+  const w=host.clientWidth,h=host.clientHeight,showLabels=document.getElementById('labels').checked;
+  const occupied=[];
+  for(const a of annotations){
+    let visible=a.enabled;
+    if(a.type==='dimension')visible=dimensions.visible;
+    else if(a.type==='floor')visible=showLabels&&!roofGroup.visible;
+    else if(a.type==='space')visible=showLabels;
+    if(visible){projected.copy(a.position).project(camera);visible=projected.z>-1&&projected.z<1&&Math.abs(projected.x)<.97&&Math.abs(projected.y)<.94;
+      let xx=(projected.x*.5+.5)*w;const yy=(-projected.y*.5+.5)*h;
+      if(!mobileLayout.matches&&xx<330&&yy<host.clientHeight-120)visible=false;
+      if(yy<safeScene.top||yy>h-safeScene.bottom)visible=false;
+      const width=a.el.offsetWidth||a.el.textContent.length*12+16;
+      xx=THREE.MathUtils.clamp(xx,width/2+8,w-width/2-8);
+      const rect={l:xx-width/2-4,r:xx+width/2+4,t:yy-30,b:yy+5};
+      if(visible&&occupied.some(r=>rect.l<r.r&&rect.r>r.l&&rect.t<r.b&&rect.b>r.t))visible=false;
+      if(visible)occupied.push(rect);
+      a.el.style.left=xx+'px';a.el.style.top=yy+'px';
+    }
+    a.el.style.display=visible?'block':'none';
+  }
+  renderer.render(scene,camera);requestAnimationFrame(tick);
+}
+requestAnimationFrame(tick);
+if(renderer.getContext().isContextLost()){
+  loading.fail('3D 显示在加载时中断，请重新加载场景。');
+  throw new Error('WebGL context lost during initialization');
+}
+await loading.finish();
